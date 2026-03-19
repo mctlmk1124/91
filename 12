@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>一纸芳华 · 匠心剪纸</title>
+    <style>
+        :root { 
+            --red: #CE221F; --gold: #D4AF37; --paper-bg: #F9F4E8;    
+            --rice: #EAE4D3; --sidebar: #F2EEE0; --text: #5D5446;     
+        }
+        * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+        body { 
+            display: flex; flex-direction: column; background: var(--rice); color: var(--text); 
+            font-family: inherit; margin: 0; height: 100vh; overflow: hidden;
+        }
+        header { padding: 8px 0; text-align: center; background: var(--sidebar); border-bottom: 1px solid var(--gold); z-index: 50; }
+        h1 { color: var(--red); margin: 0; letter-spacing: 5px; font-size: 18px; font-family: "STKaiti", "KaiTi", serif; }
+
+        .stage { flex: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background-image: radial-gradient(#d1c9b5 1px, transparent 1px); background-size: 30px 30px; }
+        #viewport { position: absolute; will-change: transform; display: flex; align-items: center; justify-content: center; transition: transform 0.05s linear; }
+        canvas { background: var(--paper-bg); border: 8px solid #fff; box-shadow: 0 10px 40px rgba(0,0,0,0.15); touch-action: none; }
+        
+        .floating-hint { position: absolute; top: 10px; background: rgba(255, 255, 255, 0.9); padding: 4px 12px; border-radius: 20px; font-size: 11px; color: var(--red); border: 1px solid var(--gold); z-index: 100; pointer-events: none; }
+
+        /* 底稿面板 */
+        #imgPanel { 
+            display: none; background: #fffde7; padding: 12px; border-top: 2px solid var(--red); 
+            position: absolute; bottom: 0; left: 0; right: 0; z-index: 100; box-shadow: 0 -5px 20px rgba(0,0,0,0.2);
+        }
+        .slider-box { display: flex; align-items: center; gap: 10px; width: 100%; margin-bottom: 8px; }
+        .slider-box span { font-size: 12px; width: 60px; color: var(--text); }
+        input[type=range] { flex: 1; height: 6px; border-radius: 5px; accent-color: var(--red); }
+
+        .controls-layer { background: var(--sidebar); border-top: 1px solid var(--gold); padding: 10px; z-index: 50; }
+        .row { display: flex; gap: 8px; margin-bottom: 8px; max-width: 600px; margin-left: auto; margin-right: auto; align-items: center; }
+        
+        .color-track { display: flex; gap: 10px; overflow-x: auto; padding: 5px; flex: 1; scrollbar-width: none; }
+        .color-btn { width: 30px; height: 30px; border-radius: 50%; border: 2px solid white; cursor: pointer; flex-shrink: 0; }
+        .color-btn.active { transform: scale(1.15); border-color: var(--gold); }
+
+        select, button { flex: 1; padding: 10px 4px; border: 1px solid var(--gold); background: #fff; color: var(--gold); cursor: pointer; font-weight: bold; border-radius: 6px; font-size: 12px; }
+        button:active { transform: scale(0.95); }
+        .active-mode { background: var(--red) !important; color: white !important; border-color: var(--red) !important; }
+        .save-btn { background: var(--gold); color: #fff; border: none; flex: 1.5; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+    <header><h1>一纸芳华</h1></header>
+
+    <div class="stage" id="stage">
+        <div class="floating-hint">捏合/滚轮:缩放画布 | 拖拽图片中心:移动底稿 | 确认落刀后开始剪裁</div>
+        <div id="viewport">
+            <canvas id="cvs" width="700" height="700"></canvas>
+        </div>
+        
+        <div id="imgPanel">
+            <div class="slider-box"><span>底稿大小</span><input type="range" id="imgScale" min="0.1" max="2.5" step="0.01" value="0.6"></div>
+            <div class="slider-box"><span>底稿旋转</span><input type="range" id="imgRotate" min="0" max="360" step="1" value="0"></div>
+            <div class="row" style="margin-bottom:0">
+                <button onclick="bakeImg()" style="background:var(--red); color:white; border:none; flex:2;">确认落刀剪裁</button>
+                <button onclick="closeImgPanel()" style="flex:1; background:#ccc; color:#666; border:none;">取消底稿</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="controls-layer">
+        <div class="row">
+            <div class="color-track" id="colorTrack"></div>
+            <button onclick="undo()" style="flex:0.5">撤销</button>
+            <button onclick="clearPaper()" style="flex:0.5">清空</button>
+        </div>
+        <div class="row">
+            <select id="foldSelect" onchange="resetAll()"><option value="4">四叠</option><option value="6">六叠</option><option value="8" selected>八叠</option><option value="12">十二叠</option></select>
+            <button onclick="document.getElementById('fileInp').click()">📸 导入底稿</button>
+            <input type="file" id="fileInp" accept="image/*" style="display:none">
+        </div>
+        <div class="row">
+            <button id="modeCut" class="active-mode" onclick="toggleMode(false)">✂️ 剪裁</button>
+            <button id="modeView" onclick="toggleMode(true)">👁️ 展开</button>
+            <button onclick="exportArt()" class="save-btn">保存作品</button>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('cvs'), ctx = canvas.getContext('2d');
+    const viewport = document.getElementById('viewport');
+    const bCanvas = document.createElement('canvas'); bCtx = bCanvas.getContext('2d');
+    bCanvas.width = 700; bCanvas.height = 700;
+
+    const PAPERS = [{color:'#CE221F'},{color:'#E03636'},{color:'#B8860B'},{color:'#005831'},{color:'#1D4B7A'},{color:'#E8E8E8'}];
+    let currentPaperColor = PAPERS[0].color;
+    let cam = { x: 0, y: 0, scale: 0.5 };
+    let gesture = { isMoving: false, isPinching: false, lastX: 0, lastY: 0, lastDist: 0 };
+    let folds = 8, isView = false, isDrawing = false, path = [], undoStack = [];
+    
+    let fImg = null, imgPos = { x: 350, y: 350, sc: 0.6, ang: 0, dragging: false };
+    const cx = 350, cy = 350, r = 320;
+
+    function init() {
+        initColorUI(); doResetLogic(); 
+        window.onresize = resetCamera;
+        
+        // 缩放旋转滑块
+        document.getElementById('imgScale').oninput = (e) => { imgPos.sc = parseFloat(e.target.value); render(); };
+        document.getElementById('imgRotate').oninput = (e) => { imgPos.ang = parseFloat(e.target.value); render(); };
+
+        // 解析图片
+        document.getElementById('fileInp').onchange = (e) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const img = new Image();
+                img.onload = () => {
+                    fImg = img; imgPos = { x: 350, y: 350, sc: 0.6, ang: 0, dragging: false };
+                    document.getElementById('imgPanel').style.display = 'block';
+                    toggleMode(false); render();
+                };
+                img.src = ev.target.result;
+            };
+            if(e.target.files[0]) reader.readAsDataURL(e.target.files[0]);
+        };
+
+        // 滚轮缩放画布
+        window.addEventListener('wheel', (e) => {
+            if(e.target.closest('.controls-layer') || e.target.closest('#imgPanel')) return;
+            const factor = e.deltaY > 0 ? 0.9 : 1.1;
+            cam.scale *= factor;
+            applyTx();
+            e.preventDefault();
+        }, {passive: false});
+
+        resetCamera();
+    }
+
+    // --- 画布变换核心 ---
+    function applyTx() {
+        viewport.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${cam.scale})`;
+    }
+
+    function resetCamera() {
+        const stageH = document.getElementById('stage').offsetHeight;
+        cam.scale = (stageH / 700) * 0.75;
+        cam.x = 0; cam.y = 0;
+        applyTx();
+    }
+
+    // --- 底稿处理 ---
+    function bakeImg() {
+        if (!fImg) return; saveState();
+        const t = document.createElement('canvas'); t.width = 700; t.height = 700;
+        const tx = t.getContext('2d');
+        tx.save(); tx.translate(imgPos.x, imgPos.y); tx.rotate(imgPos.ang * Math.PI / 180);
+        tx.drawImage(fImg, -fImg.width*imgPos.sc/2, -fImg.height*imgPos.sc/2, fImg.width*imgPos.sc, fImg.height*imgPos.sc);
+        tx.restore();
+        const d = tx.getImageData(0,0,700,700);
+        for (let i = 0; i < d.data.length; i += 4) {
+            const bri = (d.data[i] + d.data[i+1] + d.data[i+2]) / 3;
+            d.data[i+3] = (d.data[i+3] > 40 && bri < 170) ? 255 : 0;
+        }
+        tx.putImageData(d, 0, 0);
+        bCtx.save(); bCtx.globalCompositeOperation = 'destination-out'; bCtx.drawImage(t, 0, 0); bCtx.restore();
+        closeImgPanel();
+    }
+
+    function closeImgPanel() { fImg = null; document.getElementById('imgPanel').style.display = 'none'; render(); }
+
+    // --- 交互系统修复 ---
+    function getPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const t = (e.touches && e.touches[0]) ? e.touches[0] : e;
+        const sx = 700 / rect.width, sy = 700 / rect.height;
+        return { x: (t.clientX - rect.left) * sx, y: (t.clientY - rect.top) * sy };
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        const p = getPos(e);
+        if (fImg && Math.hypot(p.x - imgPos.x, p.y - imgPos.y) < 150) { imgPos.dragging = true; return; }
+        if (e.button === 2 || e.button === 1) { gesture.isMoving = true; gesture.lastX = e.clientX; gesture.lastY = e.clientY; }
+        else if (!isView && e.button === 0) { saveState(); isDrawing = true; path = [p]; }
+    });
+
+    canvas.addEventListener('touchstart', (e) => {
+        const p = getPos(e[0] || e.touches[0]);
+        if (e.touches.length === 1) {
+            if (fImg && Math.hypot(p.x - imgPos.x, p.y - imgPos.y) < 150) { imgPos.dragging = true; return; }
+            if (!isView) { saveState(); isDrawing = true; path = [p]; }
+        } else if (e.touches.length === 2) {
+            gesture.isPinching = true; isDrawing = false;
+            gesture.lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            gesture.lastX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            gesture.lastY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        }
+    }, {passive: false});
+
+    window.addEventListener('mousemove', (e) => {
+        const p = getPos(e);
+        if (imgPos.dragging) { imgPos.x = p.x; imgPos.y = p.y; render(); }
+        else if (gesture.isMoving) { cam.x += (e.clientX - gesture.lastX); cam.y += (e.clientY - gesture.lastY); gesture.lastX = e.clientX; gesture.lastY = e.clientY; applyTx(); }
+        else if (isDrawing) { path.push(p); render(); }
+    });
+
+    window.addEventListener('touchmove', (e) => {
+        const p = getPos(e.touches[0]);
+        if (imgPos.dragging) { imgPos.x = p.x; imgPos.y = p.y; render(); e.preventDefault(); }
+        else if (gesture.isPinching && e.touches.length === 2) {
+            const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2, my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            cam.scale *= (d / gesture.lastDist); 
+            cam.x += (mx - gesture.lastX); cam.y += (my - gesture.lastY);
+            gesture.lastDist = d; gesture.lastX = mx; gesture.lastY = my;
+            applyTx(); e.preventDefault();
+        } else if (isDrawing) { path.push(p); render(); e.preventDefault(); }
+    }, {passive: false});
+
+    window.addEventListener('mouseup', endTouch);
+    window.addEventListener('touchend', endTouch);
+
+    function endTouch() {
+        if (isDrawing && path.length > 2) {
+            bCtx.save(); bCtx.globalCompositeOperation = 'destination-out';
+            bCtx.beginPath(); bCtx.moveTo(path[0].x, path[0].y); path.forEach(p => bCtx.lineTo(p.x, p.y));
+            bCtx.fill(); bCtx.restore();
+        }
+        isDrawing = false; gesture.isMoving = false; gesture.isPinching = false; imgPos.dragging = false; path = []; render();
+    }
+
+    // --- 绘画渲染 ---
+    function render() {
+        ctx.fillStyle = '#F9F4E8'; ctx.fillRect(0,0,700,700);
+        const step = (Math.PI * 2) / folds;
+        if (!isView) {
+            ctx.save(); ctx.globalAlpha = 0.15; for(let i=0; i<folds; i++) drawSection(ctx, i, step); ctx.restore();
+            ctx.save(); ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r+1, 0, step); ctx.clip();
+            ctx.drawImage(bCanvas, 0, 0); 
+            if (fImg) {
+                ctx.save(); ctx.globalAlpha = 0.5; ctx.translate(imgPos.x, imgPos.y); ctx.rotate(imgPos.ang * Math.PI / 180);
+                ctx.drawImage(fImg, -fImg.width*imgPos.sc/2, -fImg.height*imgPos.sc/2, fImg.width*imgPos.sc, fImg.height*imgPos.sc);
+                ctx.restore();
+            }
+            ctx.restore();
+            if (isDrawing && path.length > 1) {
+                ctx.beginPath(); ctx.strokeStyle = "#D4AF37"; ctx.lineWidth = 2;
+                ctx.moveTo(path[0].x, path[0].y); path.forEach(pd => ctx.lineTo(pd.x, pd.y)); ctx.stroke();
+            }
+        } else { for(let i=0; i<folds; i++) drawSection(ctx, i, step); }
+    }
+
+    function drawSection(t, i, angle) {
+        t.save(); t.translate(cx, cy);
+        if (i % 2 === 0) t.rotate(i * angle); else { t.rotate((i + 1) * angle); t.scale(1, -1); }
+        t.beginPath(); t.moveTo(0,0); t.arc(0,0, r+1.5, 0, angle+0.005); t.clip();
+        t.drawImage(bCanvas, -cx, -cy); t.restore();
+    }
+
+    function initColorUI() {
+        const track = document.getElementById('colorTrack');
+        PAPERS.forEach(p => {
+            const dot = document.createElement('div');
+            dot.className = 'color-btn' + (p.color === currentPaperColor ? ' active' : '');
+            dot.style.backgroundColor = p.color;
+            dot.onclick = () => {
+                currentPaperColor = p.color;
+                document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+                dot.classList.add('active');
+                const tmp = document.createElement('canvas'); tmp.width = 700; tmp.height = 700;
+                tmp.getContext('2d').drawImage(bCanvas, 0, 0);
+                bCtx.clearRect(0,0,700,700); bCtx.fillStyle = currentPaperColor; bCtx.fillRect(0,0,700,700);
+                bCtx.globalCompositeOperation = 'destination-in'; bCtx.drawImage(tmp, 0, 0);
+                bCtx.globalCompositeOperation = 'source-over'; render();
+            };
+            track.appendChild(dot);
+        });
+    }
+
+    function doResetLogic() {
+        bCtx.clearRect(0,0,700,700); bCtx.save(); bCtx.translate(cx, cy); bCtx.fillStyle = currentPaperColor;
+        bCtx.beginPath(); bCtx.moveTo(0,0); bCtx.arc(0,0, r, 0, (Math.PI*2)/folds); bCtx.fill(); bCtx.restore();
+        render();
+    }
+    function clearPaper() { saveState(); doResetLogic(); }
+    function undo() { if(undoStack.length) { bCtx.putImageData(undoStack.pop(),0,0); render(); } }
+    function saveState() { undoStack.push(bCtx.getImageData(0,0,700,700)); if(undoStack.length>30) undoStack.shift(); }
+    function resetAll() { folds = parseInt(document.getElementById('foldSelect').value); undoStack = []; doResetLogic(); resetCamera(); }
+    function toggleMode(v) { isView = v; document.getElementById('modeCut').className = !v ? "active-mode" : "select"; document.getElementById('modeView').className = v ? "active-mode" : "select"; resetCamera(); render(); }
+    function exportArt() { toggleMode(true); setTimeout(() => { const data = canvas.toDataURL(); const win = window.open(); win.document.write(`<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#eee"><img src="${data}" style="max-width:90%;box-shadow:0 0 20px rgba(0,0,0,0.2)"></body>`); }, 300); }
+
+    init();
+</script>
+</body>
+</html>
